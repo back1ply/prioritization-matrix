@@ -1,40 +1,33 @@
-// Prioritization Matrix App
+// Prioritisation Matrix App - Excel-style view
 
 (function() {
     'use strict';
 
     // Constants
     const MAX_ITEMS = 10;
-    const MIN_ITEMS = 2;
-    const STORAGE_KEY = 'prioritization-matrix-state';
+    const STORAGE_KEY = 'prioritisation-matrix-state-v2'; // v2 to clear old data
     const LABELS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'];
 
     // State
     let state = {
-        items: [],           // [{id: 'A', name: 'Item 1'}, ...]
-        comparisons: {},     // {'A-B': 'A', 'A-C': 'B', ...}
-        comparisonPairs: [], // [['A', 'B'], ['A', 'C'], ...]
-        currentComparison: 0,
-        phase: 'input'       // 'input' | 'comparing' | 'results'
+        items: [],       // [{id: 'A', name: 'Item 1'}, ...]
+        comparisons: {}  // {'A-B': 'A', 'A-C': 'B', ...}
     };
+
+    // Current modal state
+    let currentComparison = null;
 
     // DOM Elements
     const elements = {
         itemInput: document.getElementById('item-input'),
         addBtn: document.getElementById('add-btn'),
-        itemsList: document.getElementById('items-list'),
-        startBtn: document.getElementById('start-btn'),
-        itemHint: document.getElementById('item-hint'),
-        inputSection: document.getElementById('input-section'),
-        itemsSection: document.getElementById('items-section'),
-        comparisonSection: document.getElementById('comparison-section'),
-        resultsSection: document.getElementById('results-section'),
-        progressText: document.getElementById('progress-text'),
-        progressFill: document.getElementById('progress-fill'),
-        optionA: document.getElementById('option-a'),
-        optionB: document.getElementById('option-b'),
+        matrixContainer: document.getElementById('matrix-container'),
         resultsList: document.getElementById('results-list'),
-        clearBtn: document.getElementById('clear-btn')
+        clearBtn: document.getElementById('clear-btn'),
+        modalOverlay: document.getElementById('modal-overlay'),
+        modalOptionA: document.getElementById('modal-option-a'),
+        modalOptionB: document.getElementById('modal-option-b'),
+        modalCancel: document.getElementById('modal-cancel')
     };
 
     // Initialize
@@ -50,10 +43,13 @@
         elements.itemInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') handleAddItem();
         });
-        elements.startBtn.addEventListener('click', startComparisons);
-        elements.optionA.addEventListener('click', () => handleChoice('A'));
-        elements.optionB.addEventListener('click', () => handleChoice('B'));
         elements.clearBtn.addEventListener('click', handleClearAll);
+        elements.modalOptionA.addEventListener('click', () => handleModalChoice('A'));
+        elements.modalOptionB.addEventListener('click', () => handleModalChoice('B'));
+        elements.modalCancel.addEventListener('click', closeModal);
+        elements.modalOverlay.addEventListener('click', (e) => {
+            if (e.target === elements.modalOverlay) closeModal();
+        });
     }
 
     // Add Item
@@ -89,73 +85,63 @@
 
         // Clear comparisons since item IDs changed
         state.comparisons = {};
-        state.comparisonPairs = [];
-        state.currentComparison = 0;
-        state.phase = 'input';
 
         saveToStorage();
         render();
     }
 
-    // Generate Comparisons
-    function generateComparisons() {
-        const pairs = [];
-        for (let i = 0; i < state.items.length; i++) {
-            for (let j = i + 1; j < state.items.length; j++) {
-                pairs.push([state.items[i].id, state.items[j].id]);
-            }
-        }
-        return pairs;
+    // Open comparison modal
+    function openComparisonModal(rowId, colId) {
+        const rowItem = state.items.find(i => i.id === rowId);
+        const colItem = state.items.find(i => i.id === colId);
+
+        if (!rowItem || !colItem) return;
+
+        currentComparison = { rowId, colId };
+
+        elements.modalOptionA.textContent = `${rowId}: ${rowItem.name}`;
+        elements.modalOptionB.textContent = `${colId}: ${colItem.name}`;
+        elements.modalOverlay.classList.remove('hidden');
     }
 
-    // Start Comparisons
-    function startComparisons() {
-        if (state.items.length < MIN_ITEMS) {
-            alert(`At least ${MIN_ITEMS} items required.`);
-            return;
-        }
+    // Handle modal choice
+    function handleModalChoice(choice) {
+        if (!currentComparison) return;
 
-        state.comparisonPairs = generateComparisons();
-        state.comparisons = {};
-        state.currentComparison = 0;
-        state.phase = 'comparing';
-
-        saveToStorage();
-        render();
-    }
-
-    // Handle Choice
-    function handleChoice(choice) {
-        const pair = state.comparisonPairs[state.currentComparison];
-        const pairKey = `${pair[0]}-${pair[1]}`;
-        const winnerId = choice === 'A' ? pair[0] : pair[1];
+        const { rowId, colId } = currentComparison;
+        const pairKey = `${rowId}-${colId}`;
+        const winnerId = choice === 'A' ? rowId : colId;
 
         state.comparisons[pairKey] = winnerId;
-        state.currentComparison++;
 
-        if (state.currentComparison >= state.comparisonPairs.length) {
-            state.phase = 'results';
-        }
-
+        closeModal();
         saveToStorage();
         render();
     }
 
-    // Calculate Results
-    function calculateResults() {
-        const wins = {};
+    // Close modal
+    function closeModal() {
+        elements.modalOverlay.classList.add('hidden');
+        currentComparison = null;
+    }
 
-        // Initialize wins count
+    // Calculate results
+    function calculateResults() {
+        if (state.items.length === 0) return [];
+
+        const wins = {};
         state.items.forEach(item => {
             wins[item.id] = 0;
         });
 
         // Count wins
         Object.values(state.comparisons).forEach(winnerId => {
-            wins[winnerId]++;
+            if (wins[winnerId] !== undefined) {
+                wins[winnerId]++;
+            }
         });
 
-        // Create results array with ranks
+        // Create results array
         const results = state.items.map(item => ({
             id: item.id,
             name: item.name,
@@ -177,16 +163,39 @@
         return results;
     }
 
+    // Get wins count for each item
+    function getWinCounts() {
+        const wins = {};
+        state.items.forEach(item => {
+            wins[item.id] = 0;
+        });
+
+        Object.values(state.comparisons).forEach(winnerId => {
+            if (wins[winnerId] !== undefined) {
+                wins[winnerId]++;
+            }
+        });
+
+        return wins;
+    }
+
+    // Get ranks for each item
+    function getRanks() {
+        const results = calculateResults();
+        const ranks = {};
+        results.forEach(r => {
+            ranks[r.id] = r.rank;
+        });
+        return ranks;
+    }
+
     // Clear All
     function handleClearAll() {
         if (!confirm('Are you sure you want to clear all data?')) return;
 
         state = {
             items: [],
-            comparisons: {},
-            comparisonPairs: [],
-            currentComparison: 0,
-            phase: 'input'
+            comparisons: {}
         };
 
         saveToStorage();
@@ -208,128 +217,176 @@
             const saved = localStorage.getItem(STORAGE_KEY);
             if (saved) {
                 const parsed = JSON.parse(saved);
-                // Validate structure
                 if (parsed && Array.isArray(parsed.items)) {
                     state = {
                         items: parsed.items || [],
-                        comparisons: parsed.comparisons || {},
-                        comparisonPairs: parsed.comparisonPairs || [],
-                        currentComparison: parsed.currentComparison || 0,
-                        phase: parsed.phase || 'input'
+                        comparisons: parsed.comparisons || {}
                     };
                 }
             }
         } catch (e) {
             console.warn('Failed to load state:', e);
-            // Reset to default state on error
-            state = {
-                items: [],
-                comparisons: {},
-                comparisonPairs: [],
-                currentComparison: 0,
-                phase: 'input'
-            };
+            state = { items: [], comparisons: {} };
         }
     }
 
     // Render
     function render() {
-        renderItemsList();
-        renderComparison();
+        renderMatrix();
         renderResults();
         updateUI();
     }
 
-    function renderItemsList() {
-        elements.itemsList.innerHTML = state.items.map(item => `
-            <li>
-                <span class="item-label">${item.id}:</span>
-                <span class="item-name">${escapeHtml(item.name)}</span>
-                <button class="btn-delete" data-id="${item.id}" title="Remove item">&times;</button>
-            </li>
-        `).join('');
+    function renderMatrix() {
+        const n = state.items.length;
 
-        // Bind delete buttons
-        elements.itemsList.querySelectorAll('.btn-delete').forEach(btn => {
+        if (n === 0) {
+            elements.matrixContainer.innerHTML = '<p style="color: #666; padding: 20px 0;">Add items to build the comparison matrix</p>';
+            return;
+        }
+
+        const wins = getWinCounts();
+        const ranks = getRanks();
+
+        // Grid structure: each column = one item
+        // Diagonal cells = item label + name
+        // Above diagonal = comparison cells
+        // Below diagonal = empty
+
+        let html = '<table class="matrix-table">';
+
+        // Item rows
+        for (let row = 0; row < n; row++) {
+            html += '<tr class="item-row">';
+
+            for (let col = 0; col < n; col++) {
+                if (col < row) {
+                    // Below diagonal: empty spacer
+                    html += '<td class="spacer"></td>';
+                } else if (col === row) {
+                    // Diagonal: item label + name
+                    const item = state.items[row];
+                    html += `<td class="item-cell"><span class="item-label">${item.id}</span> <span class="item-name">${escapeHtml(item.name)}</span></td>`;
+                } else {
+                    // Above diagonal: comparison cell
+                    const rowId = state.items[row].id;
+                    const colId = state.items[col].id;
+                    const pairKey = `${rowId}-${colId}`;
+                    const winner = state.comparisons[pairKey] || '';
+                    const filledClass = winner ? 'filled' : '';
+
+                    html += `<td class="cell-comparison ${filledClass}" data-row="${rowId}" data-col="${colId}">${winner}</td>`;
+                }
+            }
+
+            // Delete button
+            html += `<td class="item-delete" data-id="${state.items[row].id}">&times;</td>`;
+
+            html += '</tr>';
+        }
+
+        // Header row (A B C D...)
+        html += '<tr class="header-row">';
+        for (let i = 0; i < n; i++) {
+            html += `<td>${state.items[i].id}</td>`;
+        }
+        html += '<td></td>';
+        html += '</tr>';
+
+        // Count row
+        html += '<tr class="count-row">';
+        for (let i = 0; i < n; i++) {
+            const itemId = state.items[i].id;
+            html += `<td>${wins[itemId]}</td>`;
+        }
+        html += '<td class="label">Count</td>';
+        html += '</tr>';
+
+        // Rank row (live update)
+        html += '<tr class="rank-row">';
+        for (let i = 0; i < n; i++) {
+            const itemId = state.items[i].id;
+            html += `<td>${ranks[itemId]}</td>`;
+        }
+        html += '<td class="label">Rank</td>';
+        html += '</tr>';
+
+        html += '</table>';
+
+        elements.matrixContainer.innerHTML = html;
+
+        // Bind click events
+        document.querySelectorAll('.cell-comparison').forEach(cell => {
+            cell.addEventListener('click', () => {
+                const rowId = cell.dataset.row;
+                const colId = cell.dataset.col;
+                openComparisonModal(rowId, colId);
+            });
+        });
+
+        document.querySelectorAll('.item-delete').forEach(btn => {
             btn.addEventListener('click', () => removeItem(btn.dataset.id));
         });
     }
 
-    function renderComparison() {
-        if (state.phase !== 'comparing') return;
-
-        const pair = state.comparisonPairs[state.currentComparison];
-        const itemA = state.items.find(i => i.id === pair[0]);
-        const itemB = state.items.find(i => i.id === pair[1]);
-
-        const total = state.comparisonPairs.length;
-        const current = state.currentComparison + 1;
-        const percentage = (state.currentComparison / total) * 100;
-
-        elements.progressText.textContent = `Comparison ${current} of ${total}`;
-        elements.progressFill.style.width = `${percentage}%`;
-        elements.optionA.textContent = itemA.name;
-        elements.optionB.textContent = itemB.name;
-    }
-
     function renderResults() {
-        if (state.phase !== 'results') return;
+        const n = state.items.length;
+
+        if (n === 0) {
+            // Show empty placeholder rows
+            let html = '';
+            for (let i = 0; i < MAX_ITEMS; i++) {
+                html += `
+                    <div class="result-row">
+                        <div class="result-rank">${i + 1}</div>
+                        <div class="result-name result-empty">TBC</div>
+                    </div>
+                `;
+            }
+            elements.resultsList.innerHTML = html;
+            return;
+        }
 
         const results = calculateResults();
 
-        elements.resultsList.innerHTML = results.map(result => `
-            <li>
-                <span class="rank">${result.rank}.</span>
-                <span class="result-name">${escapeHtml(result.name)}</span>
-                <span class="win-count">${result.wins} win${result.wins !== 1 ? 's' : ''}</span>
-            </li>
-        `).join('');
+        let html = '';
+
+        // Show current rankings (live update)
+        for (let i = 0; i < MAX_ITEMS; i++) {
+            const result = results[i];
+
+            if (result) {
+                html += `
+                    <div class="result-row">
+                        <div class="result-rank">${result.rank}</div>
+                        <div class="result-name">${escapeHtml(result.name)}</div>
+                    </div>
+                `;
+            } else {
+                html += `
+                    <div class="result-row">
+                        <div class="result-rank">${i + 1}</div>
+                        <div class="result-name result-empty">TBC</div>
+                    </div>
+                `;
+            }
+        }
+
+        elements.resultsList.innerHTML = html;
+    }
+
+    function isAllCompared() {
+        const n = state.items.length;
+        if (n < 2) return false;
+
+        const totalComparisons = (n * (n - 1)) / 2;
+        return Object.keys(state.comparisons).length >= totalComparisons;
     }
 
     function updateUI() {
-        const itemCount = state.items.length;
-        const canStart = itemCount >= MIN_ITEMS;
-        const canAdd = itemCount < MAX_ITEMS;
-
-        // Update hint
-        if (itemCount === 0) {
-            elements.itemHint.textContent = `Add ${MIN_ITEMS}-${MAX_ITEMS} items to start comparisons`;
-        } else if (itemCount < MIN_ITEMS) {
-            elements.itemHint.textContent = `Add ${MIN_ITEMS - itemCount} more item${MIN_ITEMS - itemCount > 1 ? 's' : ''} to start`;
-        } else {
-            const comparisons = (itemCount * (itemCount - 1)) / 2;
-            elements.itemHint.textContent = `${itemCount} items = ${comparisons} comparisons`;
-        }
-
-        // Update buttons
-        elements.startBtn.disabled = !canStart || state.phase !== 'input';
+        const canAdd = state.items.length < MAX_ITEMS;
         elements.addBtn.disabled = !canAdd;
         elements.itemInput.disabled = !canAdd;
-
-        // Show/hide sections based on phase
-        if (state.phase === 'input') {
-            elements.inputSection.classList.remove('hidden');
-            elements.itemsSection.classList.remove('hidden');
-            elements.comparisonSection.classList.add('hidden');
-            elements.resultsSection.classList.add('hidden');
-        } else if (state.phase === 'comparing') {
-            elements.inputSection.classList.add('hidden');
-            elements.itemsSection.classList.add('hidden');
-            elements.comparisonSection.classList.remove('hidden');
-            elements.resultsSection.classList.add('hidden');
-        } else if (state.phase === 'results') {
-            elements.inputSection.classList.add('hidden');
-            elements.itemsSection.classList.add('hidden');
-            elements.comparisonSection.classList.add('hidden');
-            elements.resultsSection.classList.remove('hidden');
-        }
-
-        // Update start button text based on state
-        if (Object.keys(state.comparisons).length > 0 && state.phase === 'input') {
-            elements.startBtn.textContent = 'Restart Comparisons';
-        } else {
-            elements.startBtn.textContent = 'Start Comparisons';
-        }
     }
 
     // Utility: Escape HTML
